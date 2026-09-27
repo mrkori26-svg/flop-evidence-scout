@@ -1494,6 +1494,19 @@ describe('knowing whether we are running the code on disk', () => {
     assert.equal(readGitHead(dir), 'b'.repeat(40));
   });
 
+  test('resolves HEAD through a worktree gitdir and commondir', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'head-worktree-'));
+    const common = path.join(dir, 'common');
+    const gitDir = path.join(common, 'worktrees', 'w1');
+    fs.mkdirSync(path.join(common, 'refs', 'heads'), { recursive: true });
+    fs.mkdirSync(gitDir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '.git'), `gitdir: ${gitDir}`);
+    fs.writeFileSync(path.join(gitDir, 'HEAD'), 'ref: refs/heads/topic');
+    fs.writeFileSync(path.join(gitDir, 'commondir'), '../..');
+    fs.writeFileSync(path.join(common, 'refs', 'heads', 'topic'), 'c'.repeat(40));
+    assert.equal(readGitHead(dir), 'c'.repeat(40));
+  });
+
   test('anything unreadable answers null, which never means restart', () => {
     // A packed ref, a repo mid-write, or no checkout at all are all reasons to
     // carry on rather than to stand down.
