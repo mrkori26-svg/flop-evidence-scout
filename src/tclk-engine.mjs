@@ -75,6 +75,10 @@ export const NO_LOCK_MS = 5 * 60_000;
 /** Keep a payer out for one day after a precise no-lock abandonment. */
 export const NO_LOCK_COOLDOWN_MS = 24 * 60 * 60_000;
 
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 function isNoLockReason(reason) {
   return reason === 'payer never locked before claimByMs'
     || reason === `payer did not lock within ${Math.round(NO_LOCK_MS / 60_000)} min`;
@@ -233,10 +237,11 @@ export class TclkEngine {
       hadFile = true;
     } catch (err) {
       if (err.code !== 'ENOENT') {
-        // A corrupt file is a fault, not a first run, and starting over on
-        // top of a deal in flight would strand a counterparty. Say so.
-        sayOnce('tclk:state', `[tclk] state file unreadable (${err.message}); starting empty`);
+        throw new Error('TCLK_STATE_UNREADABLE: refusing to start empty', { cause: err });
       }
+    }
+    if (hadFile && (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))) {
+      throw new Error('TCLK_STATE_INVALID: expected a state object');
     }
     this.state = { ...empty, ...(parsed && typeof parsed === 'object' ? parsed : {}) };
     if (!this.state.noLockCooldowns || typeof this.state.noLockCooldowns !== 'object'
@@ -254,9 +259,19 @@ export class TclkEngine {
 
   save() {
     fs.mkdirSync(path.dirname(this.statePath), { recursive: true });
-    const temp = `${this.statePath}.tmp`;
+    const temp = `${this.statePath}.tmp-${process.pid}-${process.hrtime.bigint()}`;
     fs.writeFileSync(temp, JSON.stringify(this.state, null, 2));
-    fs.renameSync(temp, this.statePath);
+    try {
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        try { fs.renameSync(temp, this.statePath); return; }
+        catch (err) {
+          if (!['EPERM', 'EBUSY', 'EACCES'].includes(err?.code) || attempt === 11) throw err;
+          sleepSync(Math.min(250, 20 * (2 ** attempt)));
+        }
+      }
+    } finally {
+      if (fs.existsSync(temp)) { try { fs.unlinkSync(temp); } catch {} }
+    }
   }
 
   /* ------------------------------------------------------------- turn --- */

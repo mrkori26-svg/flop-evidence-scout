@@ -32,6 +32,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 /**
  * The server's own words when a new room is refused. There are two of them.
  *
@@ -85,14 +89,20 @@ export function loadBudget(filePath) {
 }
 
 export function saveBudget(budget, filePath) {
+  const temp = `${filePath}.writing-${process.pid}-${process.hrtime.bigint()}`;
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    const temp = `${filePath}.writing`;
     fs.writeFileSync(temp, JSON.stringify(budget), 'utf8');
-    fs.renameSync(temp, filePath);
-    return true;
-  } catch {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      try { fs.renameSync(temp, filePath); return true; }
+      catch (err) {
+        if (!['EPERM', 'EBUSY', 'EACCES'].includes(err?.code) || attempt === 11) return false;
+        sleepSync(Math.min(250, 20 * (2 ** attempt)));
+      }
+    }
     return false;
+  } finally {
+    if (fs.existsSync(temp)) { try { fs.unlinkSync(temp); } catch {} }
   }
 }
 
