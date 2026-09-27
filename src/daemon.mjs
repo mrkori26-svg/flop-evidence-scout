@@ -162,13 +162,37 @@ export function leaseOutcome(attempt) {
 
 export function readGitHead(repoDir = process.cwd()) {
   try {
-    const head = fs.readFileSync(path.join(repoDir, '.git', 'HEAD'), 'utf8').trim();
+    const dotGit = path.join(repoDir, '.git');
+    let gitDir = dotGit;
+    const stat = fs.statSync(dotGit);
+    if (stat.isFile()) {
+      const marker = fs.readFileSync(dotGit, 'utf8').trim();
+      if (!marker.startsWith('gitdir:')) return null;
+      const raw = marker.slice('gitdir:'.length).trim();
+      gitDir = path.resolve(repoDir, raw);
+    } else if (!stat.isDirectory()) {
+      return null;
+    }
+
+    const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
     if (!head.startsWith('ref:')) return head || null;      // detached: HEAD is the sha
+
     const ref = head.slice(4).trim();
-    // A ref whose loose file is missing lives in packed-refs; resolving that is
-    // more machinery than this is worth, and "unknown" is the safe answer.
-    const sha = fs.readFileSync(path.join(repoDir, '.git', ref), 'utf8').trim();
-    return sha || null;
+    const candidates = [path.join(gitDir, ref)];
+    try {
+      const commonRaw = fs.readFileSync(path.join(gitDir, 'commondir'), 'utf8').trim();
+      if (commonRaw) candidates.push(path.join(path.resolve(gitDir, commonRaw), ref));
+    } catch {}
+
+    for (const candidate of candidates) {
+      try {
+        const sha = fs.readFileSync(candidate, 'utf8').trim();
+        if (sha) return sha;
+      } catch {}
+    }
+    // A ref whose loose file is missing may live in packed-refs; resolving that
+    // is more machinery than this is worth, and "unknown" is the safe answer.
+    return null;
   } catch {
     return null;
   }
